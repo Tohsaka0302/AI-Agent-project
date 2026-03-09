@@ -1,49 +1,119 @@
-Requirements
-Python 3.9+ (recommended)
-Tesseract OCR installed
-Windows / macOS / Linux
+# 🤖 AI Agent – Ghi và Tái Tạo Thao Tác Web
 
-Python packages
-pip install pillow pytesseract mss
+Công cụ tự động ghi lại thao tác người dùng trên trình duyệt (chụp màn hình + bắt click/scroll/⌨️ bàn phím real-time), phân tích bằng YOLO + OCR, và tái tạo lại các thao tác đó bằng Python.
 
-Setup Tesseract
-Windows
-Download: https://github.com/tesseract-ocr/tesseract
-Install and add to PATH
+---
 
-Usage
-Capture screenshots (loop)
-python main.py capture
+## 📋 Yêu cầu hệ thống
 
-or with interval (seconds):
-python main.py capture 2
+- Python 3.9+
+- Windows (khuyến nghị) / macOS / Linux
+- [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) đã được cài đặt
 
-Screenshots will be saved into:
-screenshots/
+### Cài đặt Tesseract (Windows)
+1. Tải về tại: https://github.com/UB-Mannheim/tesseract/wiki
+2. Cài đặt → tích chọn **"Add to PATH"** trong installer
 
-OCR latest screenshot
-python main.py ocr-latest
+---
 
-Output:
+## 📦 Cài đặt Python packages
 
-===== OCR RESULT =====
-Email or phone
-Password
-Log In
+```bash
+pip install pillow pytesseract pyautogui pygetwindow opencv-python pynput keyboard
+```
 
-Analyze page actions
-python main.py analyze
+Nếu muốn dùng YOLO thật (chính xác hơn):
+```bash
+pip install ultralytics
+```
 
-Detects semantic actions like:
-login
-username field
-password field
-submit button
+---
 
-Locate UI elements (coordinates)
-python main.py locate
+## 🗂️ Cấu trúc thư mục
 
-Example output:
-LOGIN FOUND AT:
-{'text': 'log', 'x': 374, 'y': 16, 'w': 15, 'h': 12}
-CENTER: 381 22
+```
+AI-Agent-project/
+├── main.py               # CLI chính
+├── screen/
+│   ├── capture.py        # Ghi session (3 thread: ảnh + mouse + ⌨️ bàn phím)
+│   └── utils.py          # Load/list session
+├── ocr/
+│   └── reader.py         # Tesseract OCR theo vùng
+├── agent/
+│   ├── detector.py       # YOLO detect UI elements
+│   ├── tracker.py        # Phân tích session frame-by-frame
+│   ├── replayer.py       # Tái tạo thao tác chuột + ⌨️ bàn phím bằng pyautogui
+│   ├── parser.py         # Detect action từ text OCR
+│   └── locator.py        # Tìm vị trí nút Login
+└── screenshots/          # Ảnh chụp + session log (tự tạo)
+```
+
+---
+
+## 🚀 Hướng dẫn sử dụng
+
+### Bước 1 – Ghi lại thao tác
+
+```bash
+# Ghi 1 giây/lần trong 60 giây
+python main.py record 1 60
+
+# Chỉ ghi khi cửa sổ Chrome đang active
+python main.py record 1 60 --window "Chrome"
+```
+
+Script chạy **3 luồng song song**:
+- 📷 Chụp màn hình mỗi 1 giây (để nhận diện UI)
+- 🖱️ Bắt click & scroll **real-time** bằng `pynput.mouse`
+- ⌨️ Bắt **tất cả phím gõ** real-time bằng `pynput.keyboard`
+
+> ⏳ Có đếm ngược 3 giây để bạn kịp chuyển sang browser trước khi bắt đầu.
+
+Kết quả lưu vào `screenshots/session_<id>/`:
+- `screenshot_xxxx.png` – ảnh chụp mỗi giây
+- `mouse.json` – tất cả events (screenshot + click + scroll + **keypress**)
+
+---
+
+### Bước 2 – Phân tích session
+
+```bash
+python main.py analyze-session
+```
+
+- Dùng YOLO (hoặc OpenCV fallback) để detect UI elements
+- OCR text trong từng vùng detect được
+- Map vị trí click → element gần nhất
+- Lưu kết quả ra `session_xxx_analysis.json`
+
+---
+
+### Bước 3 – Tái tạo thao tác
+
+```bash
+# Xem trước (không di chuột thật)
+python main.py replay --dry-run
+
+# Tái tạo thật, mở URL trước
+python main.py replay https://example.com
+
+# Tái tạo nhanh gấp đôi
+python main.py replay --speed 2.0
+```
+
+Replay thực hiện lại **click, scroll và phím gõ** theo đúng timing gốc.
+- Phím thường (ký tự in được): dùng `pyautogui.typewrite()`
+- Phím đặc biệt (Enter, Space, Backspace, Tab, F1–F12, mũi tên...): map tự động sang `pyautogui.press()`
+
+> ⚠️ Di chuột vào **góc trên-trái** màn hình để dừng khẩn cấp.
+
+---
+
+## 🛠️ Các lệnh khác
+
+```bash
+python main.py sessions      # Liệt kê tất cả session đã ghi
+python main.py ocr-latest    # OCR ảnh mới nhất
+python main.py analyze       # Phân tích action từ ảnh mới nhất
+python main.py locate        # Tìm nút Login trong ảnh mới nhất
+```
