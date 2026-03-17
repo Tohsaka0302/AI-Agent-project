@@ -11,7 +11,7 @@ import json
 import math
 import bisect
 
-from agent.detector import detect_elements
+from agent.detector import detect_elements, save_debug_image
 from ocr.reader import enrich_elements_with_ocr
 
 
@@ -95,6 +95,13 @@ def analyze_session(session_frames: list, output_dir: str = "screenshots") -> st
             return []
         els = detect_elements(path)
         els = enrich_elements_with_ocr(path, els)
+
+        # Lưu ảnh debug với bounding box
+        if els:
+            base, ext = os.path.splitext(path)
+            debug_path = f"{base}_yolo{ext}"
+            save_debug_image(path, els, debug_path)
+
         _detect_cache[fname] = els
         return els
 

@@ -155,3 +155,52 @@ def _fallback_detect(image_path: str) -> list:
     except ImportError:
         print("[WARN] cv2 not installed. No fallback detection available.")
         return []
+
+
+def save_debug_image(image_path: str, elements: list, output_path: str):
+    """
+    Vẽ bounding box + label + confidence lên bản copy của ảnh và lưu ra file.
+    Dùng để debug xem YOLO nhận diện được gì.
+    """
+    try:
+        import cv2
+        img = cv2.imread(image_path)
+        if img is None:
+            print(f"[debug] Cannot read image: {image_path}")
+            return
+
+        for el in elements:
+            bbox = el["bbox"]
+            x, y, w, h = bbox["x"], bbox["y"], bbox["w"], bbox["h"]
+            label = el.get("label", "?")
+            conf  = el.get("conf", 0)
+            text  = el.get("text", "")
+
+            # Màu theo loại element
+            color = (0, 255, 0)  # Xanh lá mặc định
+            if label in ("button", "submit"):
+                color = (0, 165, 255)  # Cam
+            elif label == "input":
+                color = (255, 200, 0)  # Xanh dương nhạt
+
+            # Vẽ rectangle
+            cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+
+            # Label text
+            disp = f"{label} {conf:.2f}"
+            if text:
+                disp += f" '{text[:20]}'"
+
+            # Background cho text dễ đọc
+            (tw, th), _ = cv2.getTextSize(disp, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(img, (x, y - th - 6), (x + tw + 4, y), color, -1)
+            cv2.putText(img, disp, (x + 2, y - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+
+        cv2.imwrite(output_path, img)
+        print(f"  🖼️  Debug image saved: {os.path.basename(output_path)}")
+
+    except ImportError:
+        print("[debug] cv2 not installed, skipping debug image.")
+    except Exception as e:
+        print(f"[debug] Error saving debug image: {e}")

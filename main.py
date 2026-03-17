@@ -46,9 +46,7 @@ def main():
     cmd = sys.argv[1]
     args = sys.argv[2:]
 
-    # ──────────────────────────────────────────────
     # record [interval] [duration] [--window "Title"]
-    # ──────────────────────────────────────────────
     if cmd == "record":
         interval = 1
         duration = 60
@@ -78,9 +76,8 @@ def main():
         print(f"\n💡 Tip: chạy lệnh tiếp theo để phân tích session này:")
         print(f"   python main.py analyze-session")
 
-    # ──────────────────────────────────────────────
     # analyze-session
-    # ──────────────────────────────────────────────
+
     elif cmd == "analyze-session":
         frames = load_session()
         if not frames:
@@ -92,9 +89,8 @@ def main():
             print(f"\n💡 Tip: replay thao tác với:")
             print(f"   python main.py replay")
 
-    # ──────────────────────────────────────────────
     # replay [url] [--speed X] [--dry-run]
-    # ──────────────────────────────────────────────
+ 
     elif cmd == "replay":
         url = None
         speed = 1.0
@@ -113,9 +109,9 @@ def main():
 
         replay(url=url, dry_run=dry_run, speed=speed)
 
-    # ──────────────────────────────────────────────
+  
     # sessions – liệt kê session đã ghi
-    # ──────────────────────────────────────────────
+   
     elif cmd == "sessions":
         sessions = list_sessions()
         if not sessions:
@@ -127,9 +123,8 @@ def main():
             keys = s.get('keys', 0)
             print(f"{s['session_id']:<15} {s['screenshots']:>5} {s['clicks']:>8} {s['scrolls']:>8} {keys:>7} {s['size_mb']:>6.1f}MB  {s['folder']}")
 
-    # ──────────────────────────────────────────────
+
     # clean <session_id|all>
-    # ──────────────────────────────────────────────
     elif cmd == "clean":
         if not args:
             print("❌ Dùng: python main.py clean <session_id>")

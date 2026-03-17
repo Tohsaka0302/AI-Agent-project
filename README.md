@@ -34,17 +34,19 @@ pip install ultralytics
 ```
 AI-Agent-project/
 ├── main.py               # CLI chính
+├── yolov8n.pt            # YOLOv8 nano model
 ├── screen/
 │   ├── capture.py        # Ghi session (3 thread: ảnh + mouse + ⌨️ bàn phím)
 │   └── utils.py          # Load/list session
 ├── ocr/
 │   └── reader.py         # Tesseract OCR theo vùng
 ├── agent/
-│   ├── detector.py       # YOLO detect UI elements
+│   ├── detector.py       # YOLO detect UI elements + vẽ debug bbox
 │   ├── tracker.py        # Phân tích session frame-by-frame
-│   ├── replayer.py       # Tái tạo thao tác chuột + ⌨️ bàn phím bằng pyautogui
+│   ├── replayer.py       # Tái tạo thao tác (element-based, dùng live YOLO+OCR)
 │   ├── parser.py         # Detect action từ text OCR
 │   └── locator.py        # Tìm vị trí nút Login
+├── models/               # Custom YOLO model (nếu có)
 └── screenshots/          # Ảnh chụp + session log (tự tạo)
 ```
 
@@ -84,13 +86,17 @@ python main.py analyze-session
 - Dùng YOLO (hoặc OpenCV fallback) để detect UI elements
 - OCR text trong từng vùng detect được
 - Map vị trí click → element gần nhất
-- Lưu kết quả ra `session_xxx_analysis.json`
+- 🖼️ **Lưu ảnh debug** `screenshot_xxxx_yolo.png` với bounding box để xem YOLO nhận diện gì
+- Lưu kết quả phân tích ra `analysis.json`
 
 ---
 
 ### Bước 3 – Tái tạo thao tác
 
 ```bash
+# Tái tạo thao tác từ session mới nhất
+python main.py replay
+
 # Xem trước (không di chuột thật)
 python main.py replay --dry-run
 
@@ -101,9 +107,24 @@ python main.py replay https://example.com
 python main.py replay --speed 2.0
 ```
 
-Replay thực hiện lại **click, scroll và phím gõ** theo đúng timing gốc.
-- Phím thường (ký tự in được): dùng `pyautogui.typewrite()`
-- Phím đặc biệt (Enter, Space, Backspace, Tab, F1–F12, mũi tên...): map tự động sang `pyautogui.press()`
+Replay dùng **element-based targeting** và **smart keyboard replay**:
+
+**🖱️ Click**: Chụp screenshot hiện tại → YOLO+OCR detect elements → tìm element khớp (label + text) → click vào vị trí element mới. Nếu không tìm thấy → fallback tọa độ gốc.
+
+**⌨️ Phím gõ**:
+- Tự động gộp chuỗi IME Tiếng Việt (Telex/UniKey) — không bị nhân đôi ký tự
+- Hỗ trợ Unicode (ê, ề, á, ơ...) qua clipboard paste
+- Tổ hợp phím (Ctrl+A, Ctrl+C, Ctrl+V...) tự động nhận diện và replay bằng `hotkey()`
+- Phím đặc biệt (Enter, Tab, F1–F12...): `pyautogui.press()`
+
+**↕️ Scroll**: replay theo tọa độ gốc
+
+Console sẽ hiển thị:
+- `[IME] Collapsed X IME intermediate events` — đã gộp chuỗi IME
+- `[MODS] X hotkey combos detected` — đã nhận diện tổ hợp phím
+- `✅ LIVE [button] 'Login'` — click vào element trên màn hình hiện tại
+- `⚠️ FALLBACK` — dùng tọa độ gốc
+- `⌨️ HOTKEY ctrl+a` — replay tổ hợp phím
 
 > ⚠️ Di chuột vào **góc trên-trái** màn hình để dừng khẩn cấp.
 
