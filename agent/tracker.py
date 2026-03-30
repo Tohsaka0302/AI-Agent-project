@@ -68,8 +68,14 @@ def analyze_session(session_frames: list, output_dir: str = "screenshots") -> st
 
     # Phân loại events
     screenshots  = [e for e in session_frames if e.get("type") == "screenshot"]
-    actions      = [e for e in session_frames if e.get("type") in ("click", "scroll")]
+    actions      = [e for e in session_frames if e.get("type") in ("click", "scroll", "scroll_start", "scroll_end")]
     key_events   = [e for e in session_frames if e.get("type") in ("keypress", "keyrelease")]
+
+    # Event-driven mode: click/scroll_start/scroll_end cũng có screenshot
+    # → thêm vào danh sách screenshots để dùng cho context lookup
+    for e in session_frames:
+        if e.get("type") in ("click", "scroll_start", "scroll_end") and e.get("screenshot"):
+            screenshots.append(e)
 
     # Fallback: nếu log cũ (không có type) thì coi tất cả là screenshot
     if not screenshots and not actions:
@@ -111,6 +117,7 @@ def analyze_session(session_frames: list, output_dir: str = "screenshots") -> st
     processed = 0
 
     # ── Analyze click/scroll events (ưu tiên vì đây là action thật) ──
+    click_debug_counter = 0
     for event in actions:
         processed += 1
         mx = event["mouse_x"]
@@ -118,8 +125,13 @@ def analyze_session(session_frames: list, output_dir: str = "screenshots") -> st
         ts = event["timestamp"]
         ev_type = event["type"]
 
-        # Tìm screenshot gần nhất để detect UI context
-        nearest_ss = _find_nearest_screenshot(screenshots, ts)
+        # Event-driven mode: event tự có screenshot → dùng trực tiếp
+        # Legacy mode: tìm screenshot gần nhất
+        if event.get("screenshot"):
+            nearest_ss = event
+        else:
+            nearest_ss = _find_nearest_screenshot(screenshots, ts)
+
         nearest_el = None
         n_elements = 0
 
@@ -127,6 +139,21 @@ def analyze_session(session_frames: list, output_dir: str = "screenshots") -> st
             elements = get_elements_for_screenshot(nearest_ss)
             n_elements = len(elements)
             nearest_el = find_nearest_element(elements, mx, my)
+
+            # Lưu debug image cho click event (highlight element đã click)
+            if ev_type == "click" and elements:
+                click_debug_counter += 1
+                ss_path = nearest_ss.get("screenshot", "")
+                if not os.path.exists(ss_path):
+                    ss_path = os.path.join(output_dir, os.path.basename(ss_path))
+                if os.path.exists(ss_path):
+                    base, ext = os.path.splitext(ss_path)
+                    debug_path = f"{base}_click_{click_debug_counter:04d}{ext}"
+                    save_debug_image(
+                        ss_path, elements, debug_path,
+                        clicked_element=nearest_el,
+                        click_pos=(mx, my),
+                    )
 
         label = f"[{ev_type}]"
         el_info = f"→ [{nearest_el['label']}] '{nearest_el['text']}' dist={nearest_el['_dist_to_mouse']}" if nearest_el else "→ no element nearby"
@@ -140,6 +167,8 @@ def analyze_session(session_frames: list, output_dir: str = "screenshots") -> st
             "dx":        event.get("dx"),
             "dy":        event.get("dy"),
             "context_screenshot": nearest_ss.get("screenshot", "") if nearest_ss else "",
+            "screenshot": event.get("screenshot", ""),
+            "url":       event.get("url"),
             "elements_detected": n_elements,
             "nearest_element": nearest_el,
         })

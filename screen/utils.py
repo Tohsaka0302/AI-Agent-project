@@ -64,9 +64,10 @@ def list_sessions(base: str = "screenshots") -> list:
         with open(log_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        shots   = sum(1 for e in data if e.get("type") == "screenshot")
+        # Count screenshots (periodic + event-driven)
+        shots   = sum(1 for e in data if e.get("screenshot"))
         clicks  = sum(1 for e in data if e.get("type") == "click")
-        scrolls = sum(1 for e in data if e.get("type") == "scroll")
+        scrolls = sum(1 for e in data if e.get("type") in ("scroll", "scroll_start", "scroll_end"))
         keys    = sum(1 for e in data if e.get("type") == "keypress")
 
         # Tính dung lượng folder

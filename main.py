@@ -15,11 +15,12 @@ HELP_TEXT = """
 ╔══════════════════════════════════════════════════════════╗
 ║              AI Agent – Screen Recorder & Replayer       ║
 ╠══════════════════════════════════════════════════════════╣
-║  RECORDING                                               ║
-║    record [interval=1] [duration=60]                     ║
-║      Ví dụ: python main.py record 1 60                   ║
-║    record [interval] [duration] --window "Chrome"        ║
-║      Ghi màn hình + click/scroll + ⌨️ bàn phím           ║
+║  RECORDING (event-driven)                                ║
+║    record [duration=60] [--periodic] [--window "T"]      ║
+║      Mặc định: chỉ chụp khi click / scroll              ║
+║      --periodic: thêm chụp định kỳ (interval giây)      ║
+║      Ví dụ: python main.py record 60                     ║
+║      Ví dụ: python main.py record 60 --periodic          ║
 ║                                                          ║
 ║  ANALYSIS                                                ║
 ║    analyze-session   YOLO + OCR phân tích session mới    ║
@@ -51,6 +52,7 @@ def main():
         interval = 1
         duration = 60
         window_title = None
+        periodic = False
 
         positional = []
         i = 0
@@ -58,6 +60,9 @@ def main():
             if args[i] == "--window" and i + 1 < len(args):
                 window_title = args[i + 1]
                 i += 2
+            elif args[i] == "--periodic":
+                periodic = True
+                i += 1
             else:
                 positional.append(args[i])
                 i += 1
@@ -67,11 +72,13 @@ def main():
         if len(positional) >= 2:
             duration = int(positional[1])
 
-        print(f"▶️  Recording: interval={interval}s, duration={duration}s, window={window_title or 'any'}")
+        mode_str = "EVENT-DRIVEN" + (" + PERIODIC" if periodic else "")
+        print(f"▶️  Recording: mode={mode_str}, duration={duration}s, window={window_title or 'any'}")
         log_path, session_id = capture_screen(
             interval=interval,
             duration=duration,
-            window_title=window_title
+            window_title=window_title,
+            periodic=periodic,
         )
         print(f"\n💡 Tip: chạy lệnh tiếp theo để phân tích session này:")
         print(f"   python main.py analyze-session")

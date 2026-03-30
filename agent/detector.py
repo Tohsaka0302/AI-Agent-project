@@ -42,18 +42,20 @@ def load_model():
         print(f"[YOLO] Loading custom model: {CUSTOM_MODEL}")
         return YOLO(CUSTOM_MODEL)
     else:
-        print(f"[YOLO] Loading default model: {DEFAULT_MODEL}")
-        return YOLO(DEFAULT_MODEL)
+        print(f"[WARN] Custom model not found. Falling back to OpenCV detection.")
+        return None
 
 
 # Singleton model để không load lại mỗi lần
 _model = None
+_model_loaded = False
 
 
 def get_model():
-    global _model
-    if _model is None:
+    global _model, _model_loaded
+    if not _model_loaded:
         _model = load_model()
+        _model_loaded = True
     return _model
 
 
@@ -157,10 +159,15 @@ def _fallback_detect(image_path: str) -> list:
         return []
 
 
-def save_debug_image(image_path: str, elements: list, output_path: str):
+def save_debug_image(image_path: str, elements: list, output_path: str,
+                     clicked_element: dict = None, click_pos: tuple = None):
     """
     Vẽ bounding box + label + confidence lên bản copy của ảnh và lưu ra file.
     Dùng để debug xem YOLO nhận diện được gì.
+
+    Args:
+        clicked_element: element đã được click (vẽ nổi bật với viền đỏ dày)
+        click_pos:       (x, y) tọa độ chuột khi click (vẽ crosshair)
     """
     try:
         import cv2
@@ -196,6 +203,35 @@ def save_debug_image(image_path: str, elements: list, output_path: str):
             cv2.rectangle(img, (x, y - th - 6), (x + tw + 4, y), color, -1)
             cv2.putText(img, disp, (x + 2, y - 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+
+        # ── Highlight clicked element ────────────────────────────
+        if clicked_element:
+            cb = clicked_element["bbox"]
+            cx, cy, cw, ch = cb["x"], cb["y"], cb["w"], cb["h"]
+            cl_label = clicked_element.get("label", "?")
+            cl_text  = clicked_element.get("text", "")
+
+            # Viền đỏ dày nổi bật
+            RED = (0, 0, 255)
+            cv2.rectangle(img, (cx, cy), (cx + cw, cy + ch), RED, 3)
+
+            # Label "CLICKED" phía trên
+            disp_c = f"CLICKED [{cl_label}]"
+            if cl_text:
+                disp_c += f" '{cl_text[:20]}'"
+            (tw, th), _ = cv2.getTextSize(disp_c, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            cv2.rectangle(img, (cx, cy - th - 8), (cx + tw + 6, cy), RED, -1)
+            cv2.putText(img, disp_c, (cx + 3, cy - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        # ── Crosshair tại vị trí click ───────────────────────────
+        if click_pos:
+            px, py = int(click_pos[0]), int(click_pos[1])
+            YELLOW = (0, 255, 255)
+            size = 18
+            cv2.line(img, (px - size, py), (px + size, py), YELLOW, 2)
+            cv2.line(img, (px, py - size), (px, py + size), YELLOW, 2)
+            cv2.circle(img, (px, py), 6, YELLOW, 2)
 
         cv2.imwrite(output_path, img)
         print(f"  🖼️  Debug image saved: {os.path.basename(output_path)}")

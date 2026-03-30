@@ -29,6 +29,7 @@ except ImportError:
 
 from agent.detector import detect_elements
 from ocr.reader import enrich_elements_with_ocr
+from screen.url_reader import get_browser_url
 
 
 # Các label được coi là clickable
@@ -36,6 +37,10 @@ CLICKABLE_LABELS = {"button", "link", "checkbox", "submit", "icon"}
 
 # Tốc độ di chuột (giây)
 MOVE_DURATION = 0.4
+
+# Visual-matching config
+WAIT_POLL_INTERVAL = 0.5   # giây giữa mỗi lần poll
+WAIT_MAX_TIMEOUT = 30      # giây tối đa đợi page ready
 
 # Map pynput special key names → pyautogui key names
 KEY_MAP = {
@@ -146,6 +151,8 @@ def _find_matching_element(target_el: dict, current_elements: list) -> dict | No
                 score += 5  # Exact match
             elif target_text in el_text or el_text in target_text:
                 score += 3  # Partial match
+        elif not target_text and not el_text:
+            score += 1  # Cả hai đều không có text (ví dụ icon) -> bonus thêm 1 điểm để đạt threshold >= 3
 
         if score > best_score:
             best_score = score
@@ -154,6 +161,63 @@ def _find_matching_element(target_el: dict, current_elements: list) -> dict | No
     # Chỉ trả về nếu đủ confident (ít nhất match label + text partial)
     if best_score >= 3:
         return best_match
+    return None
+
+
+def _wait_for_page_ready(
+    target_element: dict,
+    target_url: str = None,
+    max_wait: float = WAIT_MAX_TIMEOUT,
+    poll_interval: float = WAIT_POLL_INTERVAL,
+) -> dict | None:
+    """
+    Đợi cho đến khi trang web sẵn sàng (visual matching + optional URL).
+    Nếu có target_url, ưu tiên kiểm tra xem đã đến đúng trang chưa.
+    Sau đó chụp screenshot hiện tại → YOLO+OCR detect → tìm element khớp.
+    Nếu tìm thấy → trả về matched element.
+    Nếu timeout → trả về None (fallback về tọa độ gốc).
+    """
+    if not target_element or not HAS_IMAGEGRAB:
+        return None
+
+    start_time = time.time()
+    attempt = 0
+
+    while time.time() - start_time < max_wait:
+        attempt += 1
+
+        # 1. URL check (nếu có base url hoặc url pattern)
+        if target_url:
+            current_url = get_browser_url()
+            # So sánh lỏng lẻo: chỉ cần path và domain khớp
+            if current_url:
+                # Bỏ qua protocol (http/https), query parameters (?)
+                norm_target = target_url.split("?")[0].split("://")[-1].rstrip("/")
+                norm_current = current_url.split("?")[0].split("://")[-1].rstrip("/")
+                if norm_target and norm_current and norm_target != norm_current:
+                    # Chua đen trang → doi
+                    time.sleep(poll_interval)
+                    continue
+
+        # 2. Visual checking
+        tmp_path = _capture_current_screen()
+        if not tmp_path:
+            time.sleep(poll_interval)
+            continue
+
+        live_elements = _detect_live_elements(tmp_path)
+        matched = _find_matching_element(target_element, live_elements)
+
+        if matched:
+            elapsed = time.time() - start_time
+            print(f"      ✅ Page ready (attempt {attempt}, {elapsed:.1f}s) "
+                  f"[{matched['label']}] '{matched.get('text', '')[:20]}'")
+            return matched
+
+        time.sleep(poll_interval)
+
+    elapsed = time.time() - start_time
+    print(f"      ⚠️  Timeout sau {elapsed:.1f}s ({attempt} attempts) – fallback tọa độ gốc")
     return None
 
 
@@ -168,9 +232,15 @@ def _clipboard_type(text: str):
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
 
-    # QUAN TRỌNG: set restype cho 64-bit Windows (tránh truncate pointer)
+    # QUAN TRỌNG: set restype và argtypes cho 64-bit Windows (tránh truncate pointer/overflow)
     kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
     kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
 
     data = text.encode('utf-16-le') + b'\x00\x00'
 
@@ -341,8 +411,8 @@ def replay(
         print("[replayer] Analysis is empty.")
         return
 
-    # Chỉ replay các action thật (click, scroll, keypress) – bỏ qua frame thuần screenshot và keyrelease
-    action_frames = [e for e in frames if e.get("type") in ("click", "scroll", "keypress")]
+    # Chỉ replay các action thật (click, scroll, scroll_start, scroll_end, keypress) – bỏ qua frame thuần screenshot và keyrelease
+    action_frames = [e for e in frames if e.get("type") in ("click", "scroll", "scroll_start", "scroll_end", "keypress")]
     all_frames    = frames  # dùng nếu không có click nào (session cũ)
 
     replay_list = action_frames if action_frames else all_frames
@@ -386,59 +456,75 @@ def replay(
         mouse_x = mouse_info.get("x", 0)
         mouse_y = mouse_info.get("y", 0)
 
-        # Delay giữa các action
-        if prev_timestamp is not None:
-            delay = (timestamp - prev_timestamp) / speed
-            delay = max(0.05, min(delay, 5.0))
-        else:
-            delay = 0
-
-        # ── CLICK: Element-based targeting ──────────────────────
+        # ── CLICK: Visual-matching targeting ────────────────────
         if ev_type == "click":
             target_x, target_y = mouse_x, mouse_y
             match_info = ""
+            target_url = event.get("url")
 
-            if nearest and live_detect_ok and not dry_run:
-                # Chụp màn hình hiện tại
-                tmp_path = _capture_current_screen()
-                if tmp_path:
-                    live_elements = _detect_live_elements(tmp_path)
-                    matched = _find_matching_element(nearest, live_elements)
+            if nearest and not dry_run:
+                if live_detect_ok:
+                    # Visual matching: đợi page sẵn sàng rồi mới click
+                    print(f"  [{i+1:03d}] 🖥️  Waiting for page ready...")
+                    matched = _wait_for_page_ready(nearest, target_url)
 
                     if matched:
                         target_x = matched["bbox"]["cx"]
                         target_y = matched["bbox"]["cy"]
-                        match_info = f"✅ LIVE [{matched['label']}] '{matched.get('text', '')[:20]}' → ({target_x},{target_y})"
+                        match_info = f"✅ MATCHED [{matched['label']}] '{matched.get('text', '')[:20]}' → ({target_x},{target_y})"
                     else:
                         match_info = f"⚠️  FALLBACK tọa độ gốc ({mouse_x},{mouse_y})"
+                else:
+                    match_info = f"[{nearest['label']}] '{nearest.get('text', '')}'"
             elif nearest:
                 match_info = f"[{nearest['label']}] '{nearest.get('text', '')}'"
 
-            print(f"  [{i+1:03d}] ⏱ {delay:.2f}s  🖱️  CLICK ({target_x:4d},{target_y:4d})  {match_info}")
+            print(f"  [{i+1:03d}] 🖱️  CLICK ({target_x:4d},{target_y:4d})  {match_info}")
 
             if not dry_run:
-                time.sleep(delay)
                 pyautogui.moveTo(target_x, target_y, duration=MOVE_DURATION)
                 pyautogui.click()
+
+        # ── SCROLL_START: nhận biết vùng cần scroll ─────────────
+        elif ev_type == "scroll_start":
+            print(f"  [{i+1:03d}] 🖱️  SCROLL START ({mouse_x:4d},{mouse_y:4d})")
+            if not dry_run:
+                pyautogui.moveTo(mouse_x, mouse_y, duration=MOVE_DURATION)
 
         # ── SCROLL: giữ nguyên tọa độ gốc ──────────────────────
         elif ev_type == "scroll":
             dy = event.get("dy", 0)
             icon = f"🖱️  SCROLL {'↑' if dy > 0 else '↓'}"
-            print(f"  [{i+1:03d}] ⏱ {delay:.2f}s  {icon} ({mouse_x:4d},{mouse_y:4d})")
+            print(f"  [{i+1:03d}] {icon} ({mouse_x:4d},{mouse_y:4d})")
 
             if not dry_run:
-                time.sleep(delay)
-                pyautogui.moveTo(mouse_x, mouse_y, duration=MOVE_DURATION)
+                # Delay nhỏ giữa các scroll events (giữ tốc độ hợp lý)
+                if prev_timestamp is not None:
+                    scroll_delay = (timestamp - prev_timestamp) / speed
+                    scroll_delay = max(0.02, min(scroll_delay, 0.5))
+                    time.sleep(scroll_delay)
+                pyautogui.moveTo(mouse_x, mouse_y, duration=0.05)
                 pyautogui.scroll(int(dy * 3))
+
+        # ── SCROLL_END: kết thúc scroll ─────────────────────────
+        elif ev_type == "scroll_end":
+            print(f"  [{i+1:03d}] 🖱️  SCROLL END ({mouse_x:4d},{mouse_y:4d})")
+            if not dry_run:
+                time.sleep(0.3)  # nhỏ nghỉ sau scroll
 
         # ── KEYPRESS: hỗ trợ Unicode ─────────────────────────────
         elif ev_type == "keypress":
             raw_key = event.get("key", "")
-            print(f"  [{i+1:03d}] ⏱ {delay:.2f}s  ⌨️  KEY   {raw_key}")
+            # Delay nhỏ giữa các key events (giữ tốc độ gõ hợp lý)
+            if prev_timestamp is not None:
+                key_delay = (timestamp - prev_timestamp) / speed
+                key_delay = max(0.02, min(key_delay, 2.0))
+            else:
+                key_delay = 0.05
+            print(f"  [{i+1:03d}] ⌨️  KEY   {raw_key}")
 
             if not dry_run:
-                time.sleep(delay)
+                time.sleep(key_delay)
                 mapped = KEY_MAP.get(raw_key)
                 if mapped:
                     pyautogui.press(mapped)
@@ -453,14 +539,19 @@ def replay(
             mods = event.get("modifiers", [])
             target = event.get("target_key", "")
             combo_str = "+".join(mods + [target])
-            print(f"  [{i+1:03d}] ⏱ {delay:.2f}s  ⌨️  HOTKEY {combo_str}")
+            print(f"  [{i+1:03d}] ⌨️  HOTKEY {combo_str}")
 
             if not dry_run:
-                time.sleep(delay)
+                time.sleep(0.1)
                 pyautogui.hotkey(*mods, target)
 
         # ── Screenshot (fallback for old sessions) ──────────────
         else:
+            if prev_timestamp is not None:
+                delay = (timestamp - prev_timestamp) / speed
+                delay = max(0.05, min(delay, 5.0))
+            else:
+                delay = 0
             print(f"  [{i+1:03d}] ⏱ {delay:.2f}s  📷 MOVE  ({mouse_x:4d},{mouse_y:4d})")
             if not dry_run:
                 time.sleep(delay)
