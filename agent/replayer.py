@@ -420,7 +420,7 @@ def replay(
     meta_path = os.path.join(session_folder, "session_meta.json")
     if os.path.exists(meta_path):
         with open(meta_path, "r", encoding="utf-8") as _f:
-            _meta = __import__("json").load(_f)
+            _meta = json.load(_f)
         if not url:
             url = _meta.get("target_url")
 
@@ -457,8 +457,7 @@ def replay(
         current_url = get_browser_url()
         if not current_url: return False
         norm_current = _norm_url(current_url)
-        prefix = norm_target[:min(len(norm_target), 25)]
-        return bool(prefix and norm_current.startswith(prefix))
+        return bool(norm_target and norm_current.startswith(norm_target))
 
     if not dry_run and not HAS_PYAUTOGUI:
         print("[replayer] pyautogui not available. Use --dry-run or install pyautogui.")
@@ -503,7 +502,12 @@ def replay(
             else:
                 print(f"⏳ Vui lòng điều hướng đến đúng trang trong browser.")
             print()
-            input("   Nhấn Enter khi trang đã load xong để bắt đầu replay ... ")
+            import sys
+            if sys.stdin.isatty():
+                input("   Nhấn Enter khi trang đã load xong để bắt đầu replay ... ")
+            else:
+                print("   (Chế độ không tương tác — tự động tiếp tục sau 5s...)")
+                time.sleep(5)
             print()
             for i in range(3, 0, -1):
                 print(f"   ⏳ Bắt đầu sau {i} giây... (chuyển sang browser ngay!)", end="\r")
@@ -557,9 +561,9 @@ def replay(
                         target_y = matched["bbox"]["cy"]
                         match_info = f"✅ MATCHED [{matched['label']}] '{matched.get('text', '')[:20]}' → ({target_x},{target_y})"
                     else:
-                        print(f"\n  ❌ LỖI: Không tìm thấy element [{nearest.get('label')}] (timeout {WAIT_MAX_TIMEOUT}s).")
-                        print("  🛑 Hủy replay hoàn toàn để đảm bảo an toàn do khác biệt giao diện/mạng quá chậm!")
-                        return
+                        print(f"\n  ⚠️  CẢNH BÁO: Không tìm thấy element [{nearest.get('label')}] (timeout {WAIT_MAX_TIMEOUT}s).")
+                        print(f"  ↩️  Dùng tọa độ gốc ({target_x},{target_y}) để tiếp tục replay.")
+                        match_info = f"⚠️  FALLBACK [{nearest.get('label')}] → ({target_x},{target_y})"
                 else:
                     match_info = f"[{nearest['label']}] '{nearest.get('text', '')}'"
             elif nearest:

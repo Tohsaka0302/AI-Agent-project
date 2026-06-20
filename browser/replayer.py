@@ -170,6 +170,19 @@ def replay_session(
                         print(f"  ❌ {e}")
                         fail_count += 1
 
+                # ── PASTE (Ctrl+V captured with clipboard content) ───
+                elif action_type == "paste":
+                    value = action.get("value", "")
+                    print(f"  [{i+1:03d}] 📋 PASTE  → '{value[:20]}'", end="")
+
+                    try:
+                        page.keyboard.type(value)
+                        print("  ✅")
+                        success_count += 1
+                    except Exception as e:
+                        print(f"  ❌ {e}")
+                        fail_count += 1
+
                 # ── HOTKEY (Ctrl+A, etc.) ────────────────────────
                 elif action_type == "hotkey":
                     mods = action.get("modifiers", [])
@@ -210,9 +223,14 @@ def replay_session(
                     print(f"  [{i+1:03d}] 📋 SELECT → {selector} = '{text}'", end="")
 
                     try:
-                        page.locator(selector).first.select_option(
-                            value=value, timeout=ACTION_TIMEOUT
-                        )
+                        locator = page.locator(selector).first
+                        try:
+                            locator.select_option(value=value, timeout=ACTION_TIMEOUT)
+                        except Exception:
+                            if text:
+                                locator.select_option(label=text, timeout=ACTION_TIMEOUT)
+                            else:
+                                raise
                         print("  ✅")
                         success_count += 1
                     except Exception as e:

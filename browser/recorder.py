@@ -289,6 +289,7 @@ def record_session(
             print(f"  🛑 Close the browser window or press Ctrl+C to stop.\n")
 
         # Wait for recording to complete
+        screenshot_scan_idx = [0]  # tracks how far into actions[] we've scanned
         deadline = time.time() + duration if duration > 0 else float("inf")
         try:
             while time.time() < deadline:
@@ -303,13 +304,18 @@ def record_session(
                     print("\n🛑 Browser closed by user.")
                     break
 
-                # Take screenshots for click events that don't have one yet
-                with action_lock:
-                    for action in actions:
-                        if (action.get("type") == "click"
-                                and "screenshot" not in action
-                                and take_screenshots):
-                            take_click_screenshot(page, action)
+                # Collect pending click actions that need a screenshot, then
+                # take the screenshots outside the lock to avoid blocking
+                # handle_action() while page.screenshot() runs.
+                if take_screenshots:
+                    with action_lock:
+                        pending = [
+                            a for a in actions[screenshot_scan_idx[0]:]
+                            if a.get("type") == "click" and "screenshot" not in a
+                        ]
+                        screenshot_scan_idx[0] = len(actions)
+                    for action in pending:
+                        take_click_screenshot(page, action)
 
                 time.sleep(0.5)
 

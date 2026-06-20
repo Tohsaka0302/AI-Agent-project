@@ -15,6 +15,12 @@
   if (window.__pw_injector_active) return;
   window.__pw_injector_active = true;
 
+  // Escape text for use inside Playwright :has-text("...") selectors.
+  // Must escape \ first, then ", then collapse whitespace control chars.
+  function _escapeHasText(str) {
+    return str.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\n\r\t]/g, " ");
+  }
+
   // ── CSS Selector Generation ──────────────────────────────────
 
   /**
@@ -60,7 +66,7 @@
     const text = getVisibleText(el);
     if (text && ["BUTTON", "A", "LABEL"].includes(el.tagName)) {
       // Use Playwright's text selector format
-      const escapedText = text.replace(/"/g, '\\"');
+      const escapedText = _escapeHasText(text);
       return `${el.tagName.toLowerCase()}:has-text("${escapedText}")`;
     }
 
@@ -87,8 +93,7 @@
     // Priority 8: role attribute
     const role = el.getAttribute("role");
     if (role && text) {
-      const escapedText = text.replace(/"/g, '\\"');
-      return `[role="${role}"]:has-text("${escapedText}")`;
+      return `[role="${role}"]:has-text("${_escapeHasText(text)}")`;
     }
 
     // Fallback: nth-child path from closest identifiable ancestor
@@ -323,6 +328,35 @@
     // Capture hotkey combos (Ctrl+A, Ctrl+C, etc.)
     if (e.ctrlKey || e.metaKey) {
       if (e.key.length === 1) {
+        // Ctrl+V (paste): capture clipboard text so replay is deterministic.
+        if (e.key === "v" && (e.ctrlKey || e.metaKey)) {
+          const ts = Date.now() / 1000;
+          if (navigator.clipboard && navigator.clipboard.readText) {
+            navigator.clipboard.readText().then((text) => {
+              window.__pw_record_action(
+                JSON.stringify({ type: "paste", timestamp: ts, value: text, url: location.href })
+              );
+            }).catch(() => {
+              window.__pw_record_action(
+                JSON.stringify({
+                  type: "hotkey", timestamp: ts,
+                  modifiers: [...(e.ctrlKey ? ["Control"] : []), ...(e.metaKey ? ["Meta"] : [])],
+                  key: "v", url: location.href,
+                })
+              );
+            });
+          } else {
+            window.__pw_record_action(
+              JSON.stringify({
+                type: "hotkey", timestamp: Date.now() / 1000,
+                modifiers: [...(e.ctrlKey ? ["Control"] : []), ...(e.metaKey ? ["Meta"] : [])],
+                key: "v", url: location.href,
+              })
+            );
+          }
+          return;
+        }
+
         // Single letter combo: Ctrl+A, Ctrl+C, etc.
         window.__pw_record_action(
           JSON.stringify({
