@@ -1,5 +1,6 @@
 # runtime artifacts
 screenshots/
+sessions/
 __pycache__/
 *.pyc
 

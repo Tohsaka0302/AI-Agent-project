@@ -58,6 +58,21 @@ def capture_screen(
     os.makedirs(session_dir, exist_ok=True)
     print(f"📁 Session folder: {session_dir}")
 
+    # ── Lưu metadata phiên: URL trang đang mở ─────────────
+    initial_url = get_browser_url(window_title)
+    session_meta = {
+        "session_id": session_id,
+        "target_url": initial_url,
+        "started_at": time.time(),
+    }
+    import json as _json
+    with open(os.path.join(session_dir, "session_meta.json"), "w", encoding="utf-8") as _f:
+        _json.dump(session_meta, _f, indent=2, ensure_ascii=False)
+    if initial_url:
+        print(f"   🌐 Target URL ghi lại: {initial_url}")
+    else:
+        print(f"   ⚠️  Không detect được URL (browser chưa mở hoặc uiautomation lỗi)")
+
     log_path = os.path.join(session_dir, "mouse.json")
 
     event_log = []

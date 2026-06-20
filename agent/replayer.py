@@ -29,7 +29,7 @@ except ImportError:
 
 from agent.detector import detect_elements
 from ocr.reader import enrich_elements_with_ocr
-from screen.url_reader import get_browser_url
+from screen.url_reader import get_browser_url, HAS_UIAUTOMATION
 
 
 # Các label được coi là clickable
@@ -40,7 +40,7 @@ MOVE_DURATION = 0.4
 
 # Visual-matching config
 WAIT_POLL_INTERVAL = 0.5   # giây giữa mỗi lần poll
-WAIT_MAX_TIMEOUT = 30      # giây tối đa đợi page ready
+WAIT_MAX_TIMEOUT = 60      # giây tối đa đợi page ready
 
 # Map pynput special key names → pyautogui key names
 KEY_MAP = {
@@ -195,11 +195,15 @@ def _wait_for_page_ready(
                 norm_target = target_url.split("?")[0].split("://")[-1].rstrip("/")
                 norm_current = current_url.split("?")[0].split("://")[-1].rstrip("/")
                 if norm_target and norm_current and norm_target != norm_current:
-                    # Chua đen trang → doi
+                    # Chưa đến trang → đợi
+                    if attempt % 6 == 0:  # in ra mỗi 3 giây (với poll=0.5s)
+                        print(f"      ⏳ Đang chờ URL khớp... (hiện tại: {norm_current} | mong đợi: {norm_target})", end="\r")
                     time.sleep(poll_interval)
                     continue
 
         # 2. Visual checking
+        if attempt % 6 == 0:
+            print(f"      👁️  Đang quét màn hình tìm '{target_element.get('label')}'...      ", end="\r")
         tmp_path = _capture_current_screen()
         if not tmp_path:
             time.sleep(poll_interval)
@@ -411,6 +415,15 @@ def replay(
         print("[replayer] Analysis is empty.")
         return
 
+    # Đọc URL mục tiêu từ session_meta.json (có thể xác định chính xác hơn)
+    session_folder = os.path.dirname(analysis_path)
+    meta_path = os.path.join(session_folder, "session_meta.json")
+    if os.path.exists(meta_path):
+        with open(meta_path, "r", encoding="utf-8") as _f:
+            _meta = __import__("json").load(_f)
+        if not url:
+            url = _meta.get("target_url")
+
     # Chỉ replay các action thật (click, scroll, scroll_start, scroll_end, keypress) – bỏ qua frame thuần screenshot và keyrelease
     action_frames = [e for e in frames if e.get("type") in ("click", "scroll", "scroll_start", "scroll_end", "keypress")]
     all_frames    = frames  # dùng nếu không có click nào (session cũ)
@@ -426,22 +439,82 @@ def replay(
     print(f"[replayer] {len(replay_list)} actions để replay | Mode: {'DRY RUN' if dry_run else 'LIVE'} | Speed: {speed}x")
     print("-" * 60)
 
-    # Mở URL nếu có
-    if url:
-        print(f"\n🌐 Opening: {url}")
-        if not dry_run:
-            webbrowser.open(url)
-            time.sleep(3)
-        else:
-            print(f"  [DRY] Would open: {url}")
+    # Nếu không có URL được cấp, thử tự động tìm URL gốc từ session
+    if not url:
+        for ev in replay_list:
+            if ev.get("url"):
+                url = ev["url"]
+                break
+
+    # Chuẩn hóa URL để so sánh lỏng lẻo
+    def _norm_url(u):
+        if not u: return ""
+        return u.split("?")[0].split("://")[-1].rstrip("/").lower()
+
+    norm_target = _norm_url(url)
+
+    def _is_on_target_page() -> bool:
+        current_url = get_browser_url()
+        if not current_url: return False
+        norm_current = _norm_url(current_url)
+        prefix = norm_target[:min(len(norm_target), 25)]
+        return bool(prefix and norm_current.startswith(prefix))
 
     if not dry_run and not HAS_PYAUTOGUI:
         print("[replayer] pyautogui not available. Use --dry-run or install pyautogui.")
         return
 
-    print(f"\n▶️  Starting replay in 3 seconds...")
+    # ── Chờ đúng trang mở trước khi bắt đầu replay ──────────────────
+    print(f"\n🎯 Trang mục tiêu: {url or '(không rõ – chưa detect được URL)'}")
+    print("-" * 60)
+
     if not dry_run:
-        time.sleep(3)
+        if url and HAS_UIAUTOMATION:
+            if _is_on_target_page():
+                print(f"✅ Trang đã mở sẵn — chuẩn bị replay...")
+            else:
+                print(f"⏳ Vui lòng điều hướng đến trang trong browser:")
+                print(f"   👉  {url}")
+                print(f"   Agent sẽ tự động nhận ra khi trang đã mở (tối đa 120s)...\n")
+                found = False
+                for tick in range(240):
+                    if _is_on_target_page():
+                        print(f"\n✅ Đã nhận ra trang đúng — chuẩn bị replay...")
+                        found = True
+                        break
+                    if tick % 10 == 0:
+                        print(f"   ⏳ Đang đợi... ({tick // 2}s)", end="\r")
+                    time.sleep(0.5)
+                if not found:
+                    print(f"\n⚠️  Timeout 120s — tự động mở tab mới...")
+                    webbrowser.open(url)
+                    time.sleep(4)
+            # Countdown để chuyển sang browser
+            print()
+            for i in range(3, 0, -1):
+                print(f"   ⏳ Bắt đầu sau {i} giây... (chuyển sang browser ngay!)", end="\r")
+                time.sleep(1)
+            print()
+        else:
+            # uiautomation không có hoặc URL không biết → nhắc thủ công
+            if url:
+                print(f"⏳ Vui lòng mở trang này trong browser:")
+                print(f"   👉  {url}")
+            else:
+                print(f"⏳ Vui lòng điều hướng đến đúng trang trong browser.")
+            print()
+            input("   Nhấn Enter khi trang đã load xong để bắt đầu replay ... ")
+            print()
+            for i in range(3, 0, -1):
+                print(f"   ⏳ Bắt đầu sau {i} giây... (chuyển sang browser ngay!)", end="\r")
+                time.sleep(1)
+            print()
+
+        print(f"\n▶️  Bắt đầu replay!\n")
+    elif dry_run and url:
+        print(f"🌐 [DRY] Would wait for page: {url}")
+
+
 
     prev_timestamp = None
     live_detect_ok = HAS_IMAGEGRAB  # có thể chụp màn hình để detect live không
@@ -462,6 +535,17 @@ def replay(
             match_info = ""
             target_url = event.get("url")
 
+            # Nếu ko tìm thấy element (nearest is None), PHẢI đợi bằng thời gian thực tế để UI load
+            if not nearest:
+                if prev_timestamp is not None:
+                    delay = (timestamp - prev_timestamp) / speed
+                    delay = max(0.05, min(delay, 20.0)) # Đợi theo đúng thời gian thao tác gốc (tối đa 20s)
+                else:
+                    delay = 0.5
+                if not dry_run and delay > 0:
+                    time.sleep(delay)
+                match_info = f"⏱ Đợi {delay:.1f}s (thời gian gốc)"
+
             if nearest and not dry_run:
                 if live_detect_ok:
                     # Visual matching: đợi page sẵn sàng rồi mới click
@@ -473,7 +557,9 @@ def replay(
                         target_y = matched["bbox"]["cy"]
                         match_info = f"✅ MATCHED [{matched['label']}] '{matched.get('text', '')[:20]}' → ({target_x},{target_y})"
                     else:
-                        match_info = f"⚠️  FALLBACK tọa độ gốc ({mouse_x},{mouse_y})"
+                        print(f"\n  ❌ LỖI: Không tìm thấy element [{nearest.get('label')}] (timeout {WAIT_MAX_TIMEOUT}s).")
+                        print("  🛑 Hủy replay hoàn toàn để đảm bảo an toàn do khác biệt giao diện/mạng quá chậm!")
+                        return
                 else:
                     match_info = f"[{nearest['label']}] '{nearest.get('text', '')}'"
             elif nearest:

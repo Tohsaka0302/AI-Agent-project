@@ -94,9 +94,33 @@ def read_region(image_path: str, bbox: dict) -> str:
 
 
 def enrich_elements_with_ocr(image_path: str, elements: list) -> list:
-    """Thêm field 'text' vào mỗi element bằng OCR bbox."""
+    """Thêm field 'text' vào mỗi element bằng OCR bbox. Bổ sung các cụm text vào làm UI element nếu YOLO bỏ sót."""
     enriched = []
     for el in elements:
         text = read_region(image_path, el["bbox"])
         enriched.append({**el, "text": text})
+        
+    # Bổ sung text độc lập
+    ocr_boxes = read_with_boxes(image_path)
+    for box in ocr_boxes:
+        cx = box["x"] + box["w"] // 2
+        cy = box["y"] + box["h"] // 2
+        inside_existing = False
+        for el in enriched:
+            eb = el["bbox"]
+            if eb["x"] <= cx <= eb["x"] + eb["w"] and eb["y"] <= cy <= eb["y"] + eb["h"]:
+                inside_existing = True
+                break
+                
+        if not inside_existing:
+            enriched.append({
+                "label": "text",
+                "conf": box["conf"] / 100.0,
+                "text": box["text"],
+                "bbox": {
+                    "x": box["x"], "y": box["y"],
+                    "w": box["w"], "h": box["h"],
+                    "cx": cx, "cy": cy,
+                }
+            })
     return enriched

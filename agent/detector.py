@@ -41,8 +41,15 @@ def load_model():
     if os.path.exists(CUSTOM_MODEL):
         print(f"[YOLO] Loading custom model: {CUSTOM_MODEL}")
         return YOLO(CUSTOM_MODEL)
-    else:
-        print(f"[WARN] Custom model not found. Falling back to OpenCV detection.")
+    
+    print(f"[YOLO] Custom model not found. Loading default model: {DEFAULT_MODEL}")
+    try:
+        yolo_path = os.path.join(MODEL_DIR, DEFAULT_MODEL)
+        if not os.path.exists(yolo_path) and os.path.exists(DEFAULT_MODEL):
+            yolo_path = DEFAULT_MODEL
+        return YOLO(yolo_path) # Tự động download nếu không tìm thấy
+    except Exception as e:
+        print(f"[WARN] Failed to load YOLO ({e}). Falling back to OpenCV detection.")
         return None
 
 

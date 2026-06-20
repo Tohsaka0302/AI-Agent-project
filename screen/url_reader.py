@@ -117,8 +117,11 @@ def get_browser_url(window_title: str = None) -> str | None:
             if value_pattern:
                 url = value_pattern.Value
                 if url:
+                    # Xử lý đường dẫn file nội bộ (Windows local path: C:\... hoặc D:/...)
+                    if len(url) >= 3 and url[0].isalpha() and url[1] == ":" and url[2] in ("\\", "/"):
+                        url = "file:///" + url.replace("\\", "/")
                     # Một số browser không hiện "https://" prefix
-                    if url and not url.startswith(("http://", "https://", "about:", "chrome:", "edge:")):
+                    elif not url.startswith(("http://", "https://", "about:", "chrome:", "edge:", "file:")):
                         url = "https://" + url
                     return url
         except Exception:
