@@ -1,1 +1,10 @@
 playwright>=1.40.0
+Pillow>=10.0.0
+pyautogui>=0.9.54
+pynput>=1.7.0
+pytesseract>=0.3.10
+pygetwindow>=0.0.9
+uiautomation>=2.0.0
+opencv-python>=4.8.0
+# Optional (heavy) - needed only for YOLO element detection:
+# ultralytics>=8.0.0

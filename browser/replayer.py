@@ -16,6 +16,7 @@ except ImportError:
     HAS_PLAYWRIGHT = False
 
 from browser.utils import find_latest_session, load_session
+from browser.profile import open_persistent_context, profile_path
 
 
 # Default timeout for selector-based actions (ms)
@@ -29,6 +30,7 @@ def replay_session(
     headless: bool = False,
     dry_run: bool = False,
     browser_type: str = "chromium",
+    profile: str = None,
 ):
     """
     Replay a recorded session using Playwright.
@@ -40,6 +42,8 @@ def replay_session(
         headless:     Run browser in headless mode
         dry_run:      Print actions without executing
         browser_type: Browser engine: "chromium", "firefox", or "webkit"
+        profile:      Persistent profile name to reuse a saved login session.
+                      Defaults to the profile recorded in the session (if any).
     """
     if not dry_run and not HAS_PLAYWRIGHT:
         print("[replayer] ❌ playwright not installed.")
@@ -70,9 +74,15 @@ def replay_session(
 
     viewport = session.get("viewport", {"width": 1920, "height": 1080})
 
+    # Default to the profile the session was recorded with, unless overridden.
+    if profile is None:
+        profile = session.get("profile")
+    use_profile = bool(profile)
+
     print(f"[replayer] {len(actions)} actions | "
           f"Mode: {'DRY RUN' if dry_run else 'LIVE'} | "
-          f"Speed: {speed}x | Browser: {browser_type}")
+          f"Speed: {speed}x | Browser: {browser_type}"
+          f"{f' | Profile: {profile}' if use_profile else ''}")
     print(f"🎯 Start URL: {start_url}")
     print("-" * 60)
 
@@ -83,13 +93,26 @@ def replay_session(
 
     # ── Live replay ─────────────────────────────────────────────
     with sync_playwright() as p:
-        launcher = getattr(p, browser_type, p.chromium)
-        browser = launcher.launch(headless=headless)
-        context = browser.new_context(
-            viewport=viewport,
-            ignore_https_errors=True,
-        )
-        page = context.new_page()
+        if use_profile:
+            # Persistent context reuses a saved login session (already logged in).
+            print(f"👤 Using profile: {profile_path(profile)}")
+            browser = None
+            context = open_persistent_context(
+                p,
+                profile,
+                browser_type=browser_type,
+                headless=headless,
+                viewport=viewport,
+            )
+            page = context.pages[0] if context.pages else context.new_page()
+        else:
+            launcher = getattr(p, browser_type, p.chromium)
+            browser = launcher.launch(headless=headless)
+            context = browser.new_context(
+                viewport=viewport,
+                ignore_https_errors=True,
+            )
+            page = context.new_page()
 
         # Navigate to start URL
         print(f"\n🌐 Navigating to: {start_url}")
@@ -278,7 +301,10 @@ def replay_session(
         except KeyboardInterrupt:
             pass
 
-        browser.close()
+        if use_profile:
+            context.close()
+        else:
+            browser.close()
 
 
 def _click_with_fallback(page, selector: str, fallback_selector: str = None):

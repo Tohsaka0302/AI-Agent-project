@@ -26,6 +26,11 @@ except ImportError:
     HAS_PLAYWRIGHT = False
     print("[WARN] playwright not installed. Run: pip install playwright && playwright install chromium")
 
+from browser.profile import open_persistent_context, profile_path
+
+# Default Misa AMIS login URL (used by `login` command when --url not given)
+DEFAULT_LOGIN_URL = "https://amisapp.misa.vn/"
+
 
 # Path to injector script
 INJECTOR_JS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "injector.js")
@@ -50,12 +55,15 @@ def record_session(
     take_screenshots: bool = True,
     enable_tracing: bool = False,
     connect_cdp: str = None,
+    profile: str = None,
 ):
     """
     Record user actions on a browser page using Playwright.
 
-    Two modes:
-      - Launch mode (default): Opens a new browser.
+    Three modes:
+      - Launch mode (default): Opens a new ephemeral browser.
+      - Profile mode (profile): Opens a persistent profile so the session
+        (e.g. a logged-in Misa AMIS account) is preserved across runs.
       - Connect mode (connect_cdp): Connects to an existing Chrome via CDP.
         User must start Chrome with: chrome.exe --remote-debugging-port=9222
 
@@ -67,6 +75,8 @@ def record_session(
         enable_tracing:    Enable Playwright tracing (generates trace.zip)
         connect_cdp:       CDP endpoint URL (e.g. "http://localhost:9222").
                            If set, connects to existing browser instead of launching.
+        profile:           Persistent profile name (folder under profiles/).
+                           If set, reuses a saved login session. Ignored in connect mode.
 
     Returns:
         Tuple of (session_dir, session_id) or (None, None) on failure
@@ -85,12 +95,15 @@ def record_session(
         os.makedirs(screenshots_dir, exist_ok=True)
 
     is_connect_mode = connect_cdp is not None
+    is_profile_mode = (not is_connect_mode) and bool(profile)
 
     print(f"📁 Session folder: {session_dir}")
     print(f"🌐 Start URL: {url}")
     print(f"🕐 Max duration: {duration}s {'(unlimited)' if duration <= 0 else ''}")
     if is_connect_mode:
         print(f"🔗 Mode: CONNECT (CDP → {connect_cdp})")
+    elif is_profile_mode:
+        print(f"👤 Mode: PROFILE ({profile} → {profile_path(profile)})")
     else:
         print(f"🖥️  Mode: LAUNCH ({browser_type})")
     print()
@@ -185,6 +198,17 @@ def record_session(
                 context = contexts[0]
             else:
                 context = browser.new_context()
+        elif is_profile_mode:
+            # Profile mode: persistent context reuses a saved login session.
+            # launch_persistent_context returns a context directly (no Browser).
+            browser = None
+            context = open_persistent_context(
+                p,
+                profile,
+                browser_type=browser_type,
+                headless=False,
+                viewport={"width": 1920, "height": 1080},
+            )
         else:
             # Launch mode (original behavior)
             launcher = getattr(p, browser_type, p.chromium)
@@ -200,8 +224,9 @@ def record_session(
             context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
         # ── Get or create page ──────────────────────────────────
-        if is_connect_mode:
-            # Use existing page or create new tab
+        if is_connect_mode or is_profile_mode:
+            # Use the existing page (persistent context opens one by default;
+            # connect mode reuses the real browser's tab).
             pages = context.pages
             if pages:
                 page = pages[0]  # Use first existing tab
@@ -332,13 +357,20 @@ def record_session(
                 pass
 
         # Close browser (only if we launched it — don't close user's browser!)
-        if not is_connect_mode:
+        if is_connect_mode:
+            print("  📌 Browser left open (connect mode — your browser stays running).")
+        elif is_profile_mode:
+            # Persistent context: close the context to flush the profile to disk.
+            try:
+                context.close()
+                print(f"  💾 Profile saved: {profile_path(profile)}")
+            except Exception:
+                pass
+        else:
             try:
                 browser.close()
             except Exception:
                 pass
-        else:
-            print("  📌 Browser left open (connect mode — your browser stays running).")
 
     # ── Save session ────────────────────────────────────────────
 
@@ -349,7 +381,8 @@ def record_session(
     session_data = {
         "version": 2,
         "engine": "playwright",
-        "mode": "connect" if is_connect_mode else "launch",
+        "mode": "connect" if is_connect_mode else ("profile" if is_profile_mode else "launch"),
+        "profile": profile if is_profile_mode else None,
         "browser": browser_type,
         "start_url": url,
         "recorded_at": datetime.now(timezone.utc).isoformat(),
@@ -375,6 +408,78 @@ def record_session(
     print(f"🗑️  Để xóa: python main.py clean {session_id}")
 
     return session_dir, session_id
+
+
+def login_session(
+    profile: str = "misa",
+    url: str = None,
+    browser_type: str = "chromium",
+):
+    """
+    Open a visible browser on a persistent profile so the user can log in once
+    by hand (handles OTP / captcha / SSO). When the user is done, the profile —
+    including cookies, localStorage, and sessionStorage — is saved to disk and
+    reused by every later `record`/`replay --profile <name>` run.
+
+    Args:
+        profile:      Profile name (folder under profiles/).
+        url:          Login page to open (defaults to Misa AMIS).
+        browser_type: Browser engine: "chromium", "firefox", or "webkit".
+
+    Returns:
+        True on success, False on failure.
+    """
+    if not HAS_PLAYWRIGHT:
+        print("[login] ❌ playwright not installed.")
+        print("   Run: pip install playwright && playwright install chromium")
+        return False
+
+    login_url = url or DEFAULT_LOGIN_URL
+    target_dir = profile_path(profile)
+
+    print(f"👤 Profile: {profile}  →  {target_dir}")
+    print(f"🌐 Opening login page: {login_url}")
+    print()
+
+    with sync_playwright() as p:
+        context = open_persistent_context(
+            p,
+            profile,
+            browser_type=browser_type,
+            headless=False,
+        )
+        page = context.pages[0] if context.pages else context.new_page()
+
+        try:
+            page.goto(login_url, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            print(f"  ⚠️  Navigation warning: {e}")
+
+        print("  ✅ Browser open. Log in to your account now.")
+        print("  🔑 Complete any OTP / captcha / 2FA in the window.")
+        print("  ⏎  When you see you are fully logged in, return here and press Enter.")
+        print()
+        try:
+            input("  >>> Press Enter AFTER you have logged in to save the session... ")
+        except (KeyboardInterrupt, EOFError):
+            print("\n  🛑 Cancelled — profile not saved.")
+            try:
+                context.close()
+            except Exception:
+                pass
+            return False
+
+        # Closing the persistent context flushes cookies + storage to disk.
+        try:
+            context.close()
+        except Exception:
+            pass
+
+    print(f"\n💾 Session saved to profile: {target_dir}")
+    print(f"💡 Now run automation logged in, e.g.:")
+    print(f"   python main.py record {login_url} --profile {profile}")
+    print(f"   python main.py replay --profile {profile}")
+    return True
 
 
 def _dedupe_fills(actions: list) -> list:

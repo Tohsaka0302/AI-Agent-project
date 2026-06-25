@@ -1,6 +1,7 @@
 # runtime artifacts
 screenshots/
 sessions/
+profiles/
 __pycache__/
 *.pyc
 

@@ -3,13 +3,14 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # ── New Playwright engine ───────────────────────────────────────
-from browser.recorder import record_session
+from browser.recorder import record_session, login_session
 from browser.replayer import replay_session
 from browser.utils import (
     list_sessions as list_pw_sessions,
     delete_session as delete_pw_session,
     delete_all_sessions as delete_all_pw_sessions,
 )
+from browser.profile import list_profiles, delete_profile
 
 # ── Legacy OS-level engine (deprecated) ─────────────────────────
 from screen.capture import capture_screen
@@ -28,19 +29,26 @@ HELP_TEXT = """
 ║                                                                   ║
 ║  🚀 PLAYWRIGHT ENGINE                                             ║
 ║  ──────────────────────────────────────────────────────────────── ║
-║  record <url> [duration] [--connect] [--browser type]             ║
+║  login [--profile misa] [--url <login_url>]                       ║
+║    Log in ONCE by hand; saves session to a reusable profile       ║
+║    Ví dụ: python main.py login --profile misa                     ║
+║                                                                   ║
+║  record <url> [duration] [--connect] [--profile name] [--browser type] ║
 ║    Opens browser, records actions with CSS selectors              ║
 ║    --connect  Record on YOUR OWN Chrome (needs debug port)        ║
+║    --profile  Reuse a saved login session (see `login`)           ║
 ║                                                                   ║
 ║    Ví dụ: python main.py record https://example.com 120           ║
-║    Ví dụ: python main.py record https://facebook.com --connect    ║
+║    Ví dụ: python main.py record https://amisapp.misa.vn --profile misa ║
 ║                                                                   ║
-║  replay [--speed 1.0] [--headless] [--dry-run]                    ║
+║  replay [--speed 1.0] [--headless] [--dry-run] [--profile name]   ║
 ║    Replays latest session using Playwright                        ║
 ║    Ví dụ: python main.py replay --speed 2.0 --dry-run             ║
 ║                                                                   ║
 ║  sessions          List all recorded sessions                     ║
+║  profiles          List saved login profiles                      ║
 ║  clean <id|all>    Delete session(s)                              ║
+║  clean-profile <name|all>   Delete login profile(s)               ║
 ║                                                                   ║
 ║  🔧 LEGACY ENGINE (deprecated, OS-level)                          ║
 ║  ──────────────────────────────────────────────────────────────── ║
@@ -65,7 +73,33 @@ def main():
     #  NEW PLAYWRIGHT COMMANDS
     # ════════════════════════════════════════════════════════════
 
-    # record <url> [duration] [--connect] [--browser type]
+    # login [--profile name] [--url login_url] [--browser type]
+    if cmd == "login":
+        profile = "misa"
+        login_url = None
+        browser_type = "chromium"
+
+        i = 0
+        while i < len(args):
+            if args[i] == "--profile" and i + 1 < len(args):
+                profile = args[i + 1]
+                i += 2
+            elif args[i] == "--url" and i + 1 < len(args):
+                login_url = args[i + 1]
+                i += 2
+            elif args[i] == "--browser" and i + 1 < len(args):
+                browser_type = args[i + 1]
+                i += 2
+            elif args[i].startswith("http"):
+                login_url = args[i]
+                i += 1
+            else:
+                i += 1
+
+        login_session(profile=profile, url=login_url, browser_type=browser_type)
+        return
+
+    # record <url> [duration] [--connect] [--profile name] [--browser type]
     if cmd == "record":
         if not args or not args[0].startswith("http"):
             print("❌ Usage: python main.py record <url> [duration] [--connect] [--browser type]")
@@ -84,11 +118,15 @@ def main():
         screenshots = True
         tracing = False
         connect_cdp = None
+        profile = None
 
         i = 1
         while i < len(args):
             if args[i] == "--browser" and i + 1 < len(args):
                 browser_type = args[i + 1]
+                i += 2
+            elif args[i] == "--profile" and i + 1 < len(args):
+                profile = args[i + 1]
                 i += 2
             elif args[i] == "--connect":
                 connect_cdp = "http://localhost:9222"
@@ -108,7 +146,12 @@ def main():
             else:
                 i += 1
 
-        mode_str = f"CONNECT ({connect_cdp})" if connect_cdp else f"LAUNCH ({browser_type})"
+        if connect_cdp:
+            mode_str = f"CONNECT ({connect_cdp})"
+        elif profile:
+            mode_str = f"PROFILE ({profile})"
+        else:
+            mode_str = f"LAUNCH ({browser_type})"
         print(f"▶️  Recording: url={url}, duration={duration}s, mode={mode_str}")
         result = record_session(
             url=url,
@@ -117,10 +160,11 @@ def main():
             take_screenshots=screenshots,
             enable_tracing=tracing,
             connect_cdp=connect_cdp,
+            profile=profile,
         )
         if result and result[0]:
             print(f"\n💡 Tip: replay this session:")
-            print(f"   python main.py replay")
+            print(f"   python main.py replay{f' --profile {profile}' if profile else ''}")
 
     # replay [--speed X] [--headless] [--dry-run] [--browser type]
     elif cmd == "replay":
@@ -128,6 +172,7 @@ def main():
         headless = False
         dry_run = False
         browser_type = "chromium"
+        profile = None
 
         i = 0
         while i < len(args):
@@ -141,6 +186,9 @@ def main():
             elif args[i] == "--browser" and i + 1 < len(args):
                 browser_type = args[i + 1]
                 i += 1
+            elif args[i] == "--profile" and i + 1 < len(args):
+                profile = args[i + 1]
+                i += 1
             i += 1
 
         replay_session(
@@ -148,6 +196,7 @@ def main():
             headless=headless,
             dry_run=dry_run,
             browser_type=browser_type,
+            profile=profile,
         )
 
     # sessions – list all sessions (both new and legacy)
@@ -179,6 +228,38 @@ def main():
                 keys = s.get('keys', 0)
                 print(f"  {s['session_id']:<15} {s['screenshots']:>5} {s['clicks']:>8} "
                       f"{s['scrolls']:>8} {keys:>7} {s['size_mb']:>6.1f}MB  {s['folder']}")
+
+    # profiles – list saved login profiles
+    elif cmd == "profiles":
+        profiles = list_profiles()
+        if not profiles:
+            print("Chưa có profile nào. Tạo bằng: python main.py login --profile misa")
+            return
+        print(f"\n👤 Login Profiles ({len(profiles)}):")
+        for name in profiles:
+            print(f"  • {name}")
+
+    # clean-profile <name|all>
+    elif cmd == "clean-profile":
+        if not args:
+            print("❌ Usage: python main.py clean-profile <name>")
+            print("         python main.py clean-profile all")
+            profiles = list_profiles()
+            if profiles:
+                print("\n👤 Profiles:")
+                for name in profiles:
+                    print(f"  • {name}")
+            return
+        target = args[0]
+        if target == "all":
+            confirm = input("⚠️  Xóa TẤT CẢ login profiles? [y/N] ").strip().lower()
+            if confirm == "y":
+                for name in list_profiles():
+                    delete_profile(name)
+            else:
+                print("Hủy.")
+        else:
+            delete_profile(target)
 
     # clean <session_id|all>
     elif cmd == "clean":
